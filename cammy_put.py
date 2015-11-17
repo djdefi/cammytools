@@ -1,6 +1,5 @@
 #!/usr/bin/python
-# blah
-# booo
+
 import sys
 import os.path
 import os
@@ -38,62 +37,35 @@ def cleanup(pidfname):
 	os.remove(pidfname)
 
 
+def archive_cleanup(archivedir, archivedays):
+	logging.info("Cleaning from archive {} days {}...".format(archivedir, archivedays))
+	day_dirs = sorted(os.listdir(archivedir), reverse = True)
+	for day_dir in day_dirs[archivedays:]:
+		logging.info("Removing {}".format(day_dir))
+		shutil.rmtree(os.path.join(archivedir, day_dir), True)
+	logging.info("Cleaning of archive done.")
 
-
-def get_dirsize(directory):
-	dir_size = 0
-	for (path, dirs, files) in os.walk(directory):
-		for file in files:
-			filename = os.path.join(path, file)
-			dir_size += os.path.getsize(filename)
-	return dir_size
-
-def get_dirsize2(directory):
-	logging.info("Computing dir size ... {} ".format(directory))
-	dir_size = subprocess.check_output(['du','-s', directory]).split()[0].decode('utf-8')
-	logging.info("Computing dir size done.")
-	return dir_size	
-
-   
-def archive_image(imagedir, imagefile, archivedir):
-	dirsize = get_dirsize2(archivedir)
-	while dirsize > (1024*1024*1024)*5:
-		fnames = get_images(archivedir)
-		logging.info("Spring cleaning {}/{}".format(archivedir,fnames[0]))
-		os.remove(os.path.join(archivedir,fnames[0]))
-		dirsize = get_dirsize(archivedir)
-
-	logging.info("Archiving {}, dirsize {}".format(imagefile,dirsize))
-	shutil.copy(os.path.join(imagedir,imagefile), archivedir)
-	logging.info("Archiving {} completed.".format(imagefile))
-
-
-
-def archive_image2(imagedir, imagefile, archivedir, dirsize):
-	targetfname = os.path.join(archivedir, imagefile)
-	if os.path.isfile(targetfname):
-		logging.info("Target file already exists. Skipping. {}".format(targetfname))
-		return dirsize
-
-	while dirsize > (1024*1024*1024):
-		fnames = get_images(archivedir)
-		f = os.path.join(archivedir,fnames[0])
-		fsize = os.path.getsize(f)
-		logging.info("Spring cleaning {}".format(f))
-		os.remove(f)
-		dirsize -= fsize
-
-	logging.info("Archiving {}, dirsize {}".format(imagefile,dirsize))
-	imgfname = os.path.join(imagedir,imagefile)
-	shutil.copy(imgfname, archivedir)
-	dirsize += os.path.getsize(imgfname)
-	return dirsize
-
-
-def archive_images(imagedir, archivedir):
-	dirsize = get_dirsize(archivedir)
+def archive_images2(imagedir, archivedir, archivedays):
+	archive_cleanup(archivedir, archivedays)
+	logging.info("Archiving...")
 	for fname in get_images(imagedir):
-		dirsize = archive_image2(imagedir, fname, archivedir, dirsize)
+		# split apart the image filename into pieces. The filename from motion
+		# is formatted: 20151117_211520_01
+		# and the target folder structure will be YYYYMMDD/HH/file.jpg
+		if not fname.endswith('jpg') or fname.endswith('_sml.jpg'):
+			continue
+		yyyymmdd = fname.split('_')[0]
+		hh = fname.split('_')[1][:2]
+		target = os.path.join(archivedir, yyyymmdd, hh)
+		logging.info("Archiving {} to {}".format(fname, target))
+
+		if os.path.isfile(os.path.join(target,fname)):
+			logging.warning("File {} already exists in {} during archiving.".format(fname, target))
+			continue
+		if not os.path.isdir(target):
+			os.makedirs(target)
+		shutil.copy(os.path.join(imagedir, fname), target)
+	logging.info("Archiving done.")
 
 def resize_image(imagedir, imagefname):
 	if imagefname.endswith('_sml.jpg'):
@@ -121,7 +93,7 @@ def get_ftphandle(username, password):
 		FTPH = FTP(timeout=60)
 		FTPH.set_debuglevel(2)
 		FTPH.connect('ftp.cammy.com',10021)
-		FTPH.login(username, password) #'1NK0RU','bebifefo')
+		FTPH.login(username, password)
 	return FTPH
 
 def close_ftphandle():
@@ -138,7 +110,6 @@ def ftp_put(ftph, imagedir, imagefile):
 	try:
 		imagefname = os.path.join(imagedir, imagefile)
 		logging.info("FTP STOR {}".format(imagefname))
-		#resp = ftph.storbinary("STOR " + imagefile, open(imagefname,'rb'), blocksize = (8192*3), callback = ftp_callback)
 		resp = ftph.storbinary("STOR " + imagefile, open(imagefname,'rb'), blocksize = 4096, callback = ftp_callback)
 		ftph.voidcmd('NOOP')
 		logging.info("FTP STOR response code {}".format(resp))
@@ -156,13 +127,17 @@ def remove_image(imagedir, fname):
 		os.remove(f)
 		
 def get_fileage(imagedir, fname):
-	return int( time.time() - os.path.getctime(os.path.join(imagedir,fname)) )
+	try:
+		i = int( time.time() - os.path.getctime(os.path.join(imagedir,fname)) )
+	except Exception as e:
+		i = 0 
+	return i
 
-def ftp_putall(imagedir, username, password, delete, archivedir, resize):
+def ftp_putall(imagedir, username, password, delete, archivedir, archivedays, resize):
 	fnames = get_images(imagedir)
 
 	if archivedir:
-		archive_images(imagedir, archivedir)
+		archive_images2(imagedir, archivedir, archivedays)
 		
 
 	i = 0
@@ -171,39 +146,40 @@ def ftp_putall(imagedir, username, password, delete, archivedir, resize):
 	for i in range(len(fnames)):
 		fname = fnames[i]
 
-		# TODO: this needs testing
+		if fname.endswith('_sml.jpg'):
+			continue
+
+		logging.info("Putting image {}, {} of {}".format(fname, i, len(fnames)))
+
 		if get_fileage(imagedir, fname) > (60*60) and delete:
 			logging.warning("Frame drop! Dropping {}".format(fname))
 			remove_image(imagedir, fname)
 			continue
 
-		if fname.endswith('_sml.jpg'):
-			continue
+
 
 		orig_fname = fname
-
 
 		if resize:
 			fname = resize_image(imagedir, fname)
 
-		ftph = get_ftphandle(username, password)
-		ok = ftp_put(ftph, imagedir, fname)
+		ok = False
+		retrycount = 0
+		while not ok and retrycount < 10:
+			ftph = get_ftphandle(username, password)
+			ok = ftp_put(ftph, imagedir, fname)
+			if not ok:
+				logging.info('Problem during storing {}, retrying'.format(fname))
+				close_ftphandle()
+				retrycount += 1
+
 
 		if ok and delete:
 			remove_image(imagedir, fname)
 			remove_image(imagedir, orig_fname)
 			
 
-		if not ok:
-			logging.info('Problem during storing {}, retrying'.format(fname))
-			close_ftphandle()
-			retrycount += 1
-			if retrycount > 10:
-				logging.error('Retry count exceeded... giving up!')
-				return
-			i -= 1 # Step backwards!
-		else:
-			retrycount = 0
+	
 
 	close_ftphandle()
 	
@@ -220,6 +196,8 @@ def main():
 	parser.add_argument('--delete', help='Delete images are uploading', action='store_true', default=False)
 	parser.add_argument('--resize', help='Resize images before sending to cammy', action='store_true', default=False)
 	parser.add_argument('--archivedir', help='Archive directory', default=None)
+	parser.add_argument('--archivedays', help='Number of days of history to keep in archive', default=10)
+
 
 	args = parser.parse_args()
 
@@ -244,7 +222,7 @@ def main():
 
 	more = True
 	while more:
-		ftp_putall(args.imagedir, args.username, args.password, args.delete, args.archivedir, args.resize)
+		ftp_putall(args.imagedir, args.username, args.password, args.delete, args.archivedir, args.archivedays, args.resize)
 		if len(get_images(args.imagedir))>0 and args.delete:
 			more = True
 			logging.info('More images to upload, sending again.')
