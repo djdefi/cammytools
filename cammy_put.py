@@ -14,6 +14,7 @@ import ftplib
 import shutil
 from PIL import Image
 import subprocess
+import tempfile
 
 PIDLOCKFP = None
 FTPH = None
@@ -67,17 +68,12 @@ def archive_images2(imagedir, archivedir, archivedays):
 		shutil.copy(os.path.join(imagedir, fname), target)
 	logging.info("Archiving done.")
 
-def resize_image(imagedir, imagefname):
-	if imagefname.endswith('_sml.jpg'):
-		return imagefname
+def resize_image(imagedir, imagefname, targetfile):
 	infile = os.path.join(imagedir, imagefname)
 	im = Image.open(infile)
 	im.thumbnail( (2000,720) )
-	a,b = os.path.splitext(imagefname)
-	outfname = a + "_sml" + b 
-	im.save(os.path.join(imagedir, outfname), "JPEG", quality = 70)
-	logging.info('Resizing {} to {}'.format(infile, outfname))
-	return outfname
+	im.save(targetfile, "JPEG", quality = 70)
+	logging.info('Resizing {} to {}'.format(infile, targetfile.name))
 
 def get_images(image_dir):
 	fnames = sorted(os.listdir(image_dir))
@@ -157,11 +153,11 @@ def ftp_putall(imagedir, username, password, delete, archivedir, archivedays, re
 			continue
 
 
-
 		orig_fname = fname
-
+		tmpfile = tempfile.NamedTemporaryFile()
 		if resize:
-			fname = resize_image(imagedir, fname)
+			resize_image(imagedir, fname, tmpfile)
+			fname = tmpfile.name
 
 		ok = False
 		retrycount = 0
@@ -174,8 +170,7 @@ def ftp_putall(imagedir, username, password, delete, archivedir, archivedays, re
 				retrycount += 1
 
 
-		if ok and delete:
-			remove_image(imagedir, fname)
+		if delete:
 			remove_image(imagedir, orig_fname)
 			
 
