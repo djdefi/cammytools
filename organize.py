@@ -52,7 +52,10 @@ def organize(target, dryrun = False):
             if dryrun:
                 logging.info("DRY-RUN. Moving file skipped.")
             else:
-                shutil.move(os.path.join(target, camera, 'record', movie), new_dir)
+		try:
+                	shutil.move(os.path.join(target, camera, 'record', movie), new_dir)
+		except Exception as e:
+			traceback.print_exc()
 
 
 
